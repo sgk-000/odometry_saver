@@ -14,6 +14,7 @@
 
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <std_msgs/Header.h>
 
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -135,36 +136,40 @@ private:
 
   void points_callback(const sensor_msgs::PointCloud2ConstPtr& points_msg) {
     saved_points++;
+    points_header = points_msg->header;
     points_save_queue.push(points_msg);
   }
 
   void odometry_callback(const nav_msgs::OdometryConstPtr& odometry_msg) {
-    saved_odometry++;
-    Eigen::Matrix4d origin2odom = lookup_eigen(odometry_msg->header.frame_id, origin_frame);
-    Eigen::Matrix4d odom2base = lookup_eigen(endpoint_frame, odometry_msg->child_frame_id);
+    if(saved_odometry < saved_points){
+      saved_odometry++;
+      Eigen::Matrix4d origin2odom = lookup_eigen(odometry_msg->header.frame_id, origin_frame);
+      Eigen::Matrix4d odom2base = lookup_eigen(endpoint_frame, odometry_msg->child_frame_id);
 
-    const auto& pose = odometry_msg->pose.pose;
-    Eigen::Matrix4d odombase2odom = Eigen::Matrix4d::Identity();
-    odombase2odom.block<3, 1>(0, 3) = Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
-    odombase2odom.block<3, 3>(0, 0) = Eigen::Quaterniond(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z).toRotationMatrix();
+      const auto& pose = odometry_msg->pose.pose;
+      Eigen::Matrix4d odombase2odom = Eigen::Matrix4d::Identity();
+      odombase2odom.block<3, 1>(0, 3) = Eigen::Vector3d(pose.position.x, pose.position.y, pose.position.z);
+      odombase2odom.block<3, 3>(0, 0) = Eigen::Quaterniond(pose.orientation.w, pose.orientation.x, pose.orientation.y, pose.orientation.z).toRotationMatrix();
 
-    Eigen::Matrix4d result = odom2base * odombase2odom * origin2odom;
-    Eigen::Quaterniond quat(result.block<3, 3>(0, 0));
+      Eigen::Matrix4d result = odom2base * odombase2odom * origin2odom;
+      Eigen::Quaterniond quat(result.block<3, 3>(0, 0));
 
-    nav_msgs::OdometryPtr transformed(new nav_msgs::Odometry);
-    *transformed = *odometry_msg;
+      nav_msgs::OdometryPtr transformed(new nav_msgs::Odometry);
+      *transformed = *odometry_msg;
 
-    auto& dst_pose = transformed->pose.pose;
-    dst_pose.position.x = result(0, 3);
-    dst_pose.position.y = result(1, 3);
-    dst_pose.position.z = result(2, 3);
+      auto& dst_pose = transformed->pose.pose;
+      dst_pose.position.x = result(0, 3);
+      dst_pose.position.y = result(1, 3);
+      dst_pose.position.z = result(2, 3);
 
-    dst_pose.orientation.w = quat.w();
-    dst_pose.orientation.x = quat.x();
-    dst_pose.orientation.y = quat.y();
-    dst_pose.orientation.z = quat.z();
+      dst_pose.orientation.w = quat.w();
+      dst_pose.orientation.x = quat.x();
+      dst_pose.orientation.y = quat.y();
+      dst_pose.orientation.z = quat.z();
 
-    odometry_save_queue.push(transformed);
+      transformed->header = points_header;
+      odometry_save_queue.push(transformed);
+    }
   }
 
   Eigen::Matrix4d lookup_eigen(const std::string& target, const std::string& source, const ros::Time& stamp = ros::Time(0)) {
@@ -190,7 +195,7 @@ private:
 
   int saved_points;
   int saved_odometry;
-
+  
   std::string dst_directory;
   SaveQueue<sensor_msgs::PointCloud2ConstPtr> points_save_queue;
   SaveQueue<nav_msgs::OdometryConstPtr> odometry_save_queue;
@@ -199,6 +204,8 @@ private:
   ros::Subscriber odometry_sub;
 
   tf::TransformListener tf_listener;
+
+  std_msgs::Header points_header;
 };
 
 int main(int argc, char** argv) {
